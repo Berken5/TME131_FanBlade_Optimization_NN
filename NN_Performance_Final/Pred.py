@@ -69,8 +69,8 @@ p_scaler = joblib.load("p_scaler.save")
 q_scaler = joblib.load("q_scaler.save")
 
 #%% --------- Single Point Prediction ---------
-AOA = 85
-nBlades = 54
+AOA = 45
+nBlades = 28
 BladeL = 0.005
 
 input_data = np.array([[AOA, nBlades, BladeL]])
@@ -82,7 +82,7 @@ with torch.no_grad():
     p_unscaled = p_scaler.inverse_transform([[output_scaled[0, 0]]])[0, 0]
     q_unscaled = q_scaler.inverse_transform([[output_scaled[0, 1]]])[0, 0]
 
-print(f"\n🔍 Prediction for AOA={AOA}, nBlades={nBlades}, BladeL={BladeL} m")
+print(f"\n Prediction for AOA={AOA}, nBlades={nBlades}, BladeL={BladeL} m")
 print(f"→ Predicted Static Pressure: {p_unscaled:.2f} Pa")
 print(f"→ Predicted Mass Flow Rate: {q_unscaled:.2f} g/s")
 
@@ -96,18 +96,27 @@ try:
     if not match.empty:
         actual_p = match["Mean Average Static Pressure [Pa]"].values[0]
         actual_q = match["Mass Flow [g/s]"].values[0]
-        print("\n✅ Found match in AllRuns.csv:")
+        print("\n Found match in AllRuns.csv:")
         print(f"→ Simulated Static Pressure: {actual_p:.2f} Pa")
         print(f"→ Simulated Mass Flow Rate: {actual_q:.2f} g/s")
+        
         error_pre = np.abs((actual_p-p_unscaled)/actual_p)*100
         error_mass = np.abs(actual_q-q_unscaled)/actual_q*100
         print("\n Error:")
         print(f"→ Error in Static Pressure: {error_pre:.2f}")
         print(f"→ Error in Mass Flow Rate: {error_mass:.2f}")
+
+        print("\n MAE:")
+        print(f"→ MAE Static Pressure: {np.abs(actual_p-p_unscaled):.2f}")
+        print(f"→ MAE Mass Flow Rate: {np.abs(actual_q-q_unscaled):.2f}")
+
+        print("\n MSE:")
+        print(f"→ MSE Static Pressure: {(actual_p-p_unscaled)**2:.3f}")
+        print(f"→ MSE Mass Flow Rate: {(actual_q-q_unscaled)**2:.3f}")
     else:
-        print("\nℹ️ No exact match found in AllRuns.csv.")
+        print("\nℹ No exact match found in AllRuns.csv.")
 except FileNotFoundError:
-    print("\n⚠️ 'AllRuns.csv' not found.")
+    print("\n 'AllRuns.csv' not found.")
 
 
 #%% --------- Grid-based Prediction + Plotting ---------
@@ -202,4 +211,4 @@ try:
 
 
 except Exception as e:
-    print(f"\n⚠️ Error during grid prediction/plotting: {e}")
+    print(f"\n Error during grid prediction/plotting: {e}")
