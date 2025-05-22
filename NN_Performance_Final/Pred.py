@@ -69,8 +69,8 @@ p_scaler = joblib.load("p_scaler.save")
 q_scaler = joblib.load("q_scaler.save")
 
 #%% --------- Single Point Prediction ---------
-AOA = 45
-nBlades = 28
+AOA = 85
+nBlades = 40
 BladeL = 0.005
 
 input_data = np.array([[AOA, nBlades, BladeL]])
@@ -88,7 +88,7 @@ print(f"→ Predicted Mass Flow Rate: {q_unscaled:.2f} g/s")
 
 # --------- Ground Truth Comparison ---------
 try:
-    df = pd.read_csv("data/AllRuns_3.csv")
+    df = pd.read_csv("AllRuns.csv")
     df.columns = df.columns.str.strip()
     df['Mass Flow [g/s]'] = df['Mass Flow [kg/s]'] * 1000
 
@@ -106,17 +106,11 @@ try:
         print(f"→ Error in Static Pressure: {error_pre:.2f}")
         print(f"→ Error in Mass Flow Rate: {error_mass:.2f}")
 
-        print("\n MAE:")
-        print(f"→ MAE Static Pressure: {np.abs(actual_p-p_unscaled):.2f}")
-        print(f"→ MAE Mass Flow Rate: {np.abs(actual_q-q_unscaled):.2f}")
-
-        print("\n MSE:")
-        print(f"→ MSE Static Pressure: {(actual_p-p_unscaled)**2:.3f}")
-        print(f"→ MSE Mass Flow Rate: {(actual_q-q_unscaled)**2:.3f}")
     else:
         print("\nℹ No exact match found in AllRuns.csv.")
 except FileNotFoundError:
     print("\n 'AllRuns.csv' not found.")
+
 
 
 #%% --------- Grid-based Prediction + Plotting ---------
@@ -159,6 +153,7 @@ try:
         'ytick.labelsize': 13,
         # 'legend.fontsize': 16
     })
+    
     
 
         fig, axs = plt.subplots(1, 3, figsize=(14, 2.8), dpi=300, gridspec_kw={"width_ratios": [1.1, 1.1, 1], "wspace": 0.25})
@@ -209,6 +204,100 @@ try:
     plot_triplet("Static Pressure", true_p, pred_p, error_p, "Pressure [Pa]")
     plot_triplet("Mass Flow Rate", true_q, pred_q, error_q, "Mass Flow [g/s]")
 
+
+except Exception as e:
+    print(f"\n Error during grid prediction/plotting: {e}")
+
+
+#%%
+# Read and preprocess data
+df = pd.read_csv("AllRuns.csv")
+df.columns = df.columns.str.strip()
+df['Mass Flow [g/s]'] = df['Mass Flow [kg/s]'] * 1000
+
+match = df[(df["AoA"] == AOA) & (df["nBlades"] == nBlades) & (df["BladeL"] == BladeL)]
+
+try:
+    df = df[df["BladeL"] == BladeL]
+
+    aoa_vals = np.linspace(df["AoA"].min(), df["AoA"].max(), 50)
+    nblade_vals = np.linspace(df["nBlades"].min(), df["nBlades"].max(), 50)
+    AOA_grid, NBLADES_grid = np.meshgrid(aoa_vals, nblade_vals)
+    flat_grid = np.c_[AOA_grid.ravel(), NBLADES_grid.ravel(), np.full_like(AOA_grid.ravel(), BladeL)]
+
+    inputs_scaled = x_scaler.transform(flat_grid)
+    inputs_tensor = torch.tensor(inputs_scaled, dtype=torch.float32)
+
+    with torch.no_grad():
+        outputs_scaled = model(inputs_tensor).numpy()
+
+    pred_p = p_scaler.inverse_transform(outputs_scaled[:, 0].reshape(-1, 1)).reshape(AOA_grid.shape)
+    pred_q = q_scaler.inverse_transform(outputs_scaled[:, 1].reshape(-1, 1)).reshape(AOA_grid.shape)
+
+    true_p = griddata(df[["AoA", "nBlades"]].values, df["Mean Average Static Pressure [Pa]"].values, (AOA_grid, NBLADES_grid), method='linear')
+    true_q = griddata(df[["AoA", "nBlades"]].values, df["Mass Flow [g/s]"].values, (AOA_grid, NBLADES_grid), method='linear')
+
+    error_p = np.abs(pred_p - true_p) / np.abs(true_p) * 100
+    error_q = np.abs(pred_q - true_q) / np.abs(true_q) * 100
+
+    def plot_triplet_scatter(title, true_data, pred_data, error_data, unit):
+        plt.rcParams.update({
+            'font.size': 13,
+            'axes.labelsize': 13,
+            'axes.titlesize': 14,
+            'xtick.labelsize': 13,
+            'ytick.labelsize': 13,
+        })
+
+        fig, axs = plt.subplots(1, 3, figsize=(14, 2.8), dpi=450, gridspec_kw={"width_ratios": [1.1, 1.1, 1], "wspace": 0.25})
+
+        X = AOA_grid.ravel()
+        Y = NBLADES_grid.ravel()
+
+        # True and Predicted: common color scale
+        vmin = np.nanmin([true_data, pred_data])
+        vmax = np.nanmax([true_data, pred_data])
+
+        # Panel 1: True
+        sc0 = axs[0].scatter(X, Y, c=true_data.ravel(), cmap='plasma', vmin=vmin, vmax=vmax, marker='s', s=5)
+        axs[0].set_title("CFD " + title)
+
+        # Panel 2: Predicted
+        sc1 = axs[1].scatter(X, Y, c=pred_data.ravel(), cmap='plasma', vmin=vmin, vmax=vmax, marker='s', s=5)
+        axs[1].set_title("Predicted " + title)
+
+        # Panel 3: Error
+        sc2 = axs[2].scatter(X, Y, c=error_data.ravel(), cmap='Greys', marker='s', s=5)
+        axs[2].set_title("Error in " + title)
+
+        # Colorbars
+        cbar0 = fig.colorbar(sc0, ax=[axs[0], axs[1]], location='left', pad=0.11, shrink=0.9)
+        cbar0.set_label(unit, labelpad=8)
+        cbar0.ax.yaxis.set_label_position('left')
+        cbar0.locator = MaxNLocator(nbins=5)
+
+        cbar2 = fig.colorbar(sc2, ax=axs[2], pad=0.05, shrink=0.9)
+        cbar2.set_label("Percentage Error")
+        cbar2.locator = MaxNLocator(nbins=5)
+
+        for ax in axs:
+            ax.set_xlabel("AoA [°]")
+            ax.set_ylabel("nBlades")
+            ax.xaxis.labelpad = 10
+            ax.yaxis.labelpad = 10
+        
+        ax.set_aspect('auto')
+
+        axs[1].set_ylabel("")
+        axs[2].set_ylabel("")
+
+        fig.tight_layout(pad=1.0)
+        plt.savefig(f"{title.lower().replace(' ', '_')}_triplet_scatter.png", dpi=600, bbox_inches='tight')
+
+        plt.show()
+
+    plot_triplet_scatter("Static Pressure", true_p, pred_p, error_p, "Pressure [Pa]")
+    plot_triplet_scatter("Mass Flow Rate", true_q, pred_q, error_q, "Mass Flow [g/s]")
 
 except Exception as e:
     print(f"\n Error during grid prediction/plotting: {e}")
